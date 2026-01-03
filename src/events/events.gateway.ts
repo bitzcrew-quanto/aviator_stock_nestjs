@@ -93,7 +93,6 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
             client.join(roomToJoin);
 
-            // Immediately send last known market snapshot to this client (in-memory first, Redis fallback)
             try {
                 const last = this.redisService.getLastMarketPayload(roomToJoin);
                 if (last) {
@@ -109,7 +108,6 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
                 this.logger.debug(`No initial market snapshot available for room ${roomToJoin}`);
             }
 
-            // Join individual player balance room (STATELESS approach)
             const tenantId = client.session.tenantPublicId;
             const playerId = client.session.tenantPlayerId;
             const playerBalanceRoom = this.balanceUpdateService.getPlayerBalanceRoom(tenantId, playerId);
