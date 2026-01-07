@@ -6,7 +6,7 @@ import appConfig from './config/app.config';
 import { RedisModule } from './redis/redis.module';
 import { EventsModule } from './events/events.module';
 import { MarketsModule } from './markets/markets.module';
-import { PlinkoModule } from './game/plinko/plinko.module';
+import { AviatorModule } from './game/aviator/aviator.module';
 import { HttpModule } from './http/http.module';
 
 @Module({
@@ -15,11 +15,11 @@ import { HttpModule } from './http/http.module';
       isGlobal: true,
       load: [appConfig],
     }),
-    RedisModule,
+    RedisModule, // Global
     EventsModule,
     MarketsModule,
     HttpModule,
-    PlinkoModule,
+    AviatorModule,
   ],
   controllers: [AppController],
   providers: [AppService],

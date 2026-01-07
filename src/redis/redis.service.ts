@@ -306,6 +306,9 @@ export class RedisService implements OnModuleDestroy, OnModuleInit {
         (message: string, channel: string) => {
           try {
             const parsed = JSON.parse(message);
+            // Ignore messages that don't look like market data (e.g. Aviator game state)
+            if (!parsed.symbols) return;
+
             const stockList = parsed.symbols ? Object.keys(parsed.symbols).join(', ') : 'No stocks';
             this.logger.log(`Received market snapshot for ${channel} | Stocks: ${stockList}`);
             const room = channel;
@@ -313,11 +316,39 @@ export class RedisService implements OnModuleDestroy, OnModuleInit {
             const current: MarketDataPayload = { ...(parsed as any), market: room } as unknown as MarketDataPayload;
 
             this.deltaWorker.enrichWithDelta(current, previous)
-              .then((enriched) => {
+              .then(async (enriched) => {
                 let outbound: MarketDataPayload = 'error' in enriched ? current : enriched;
 
                 // Apply any forced deltas (e.g. from game logic mines)
                 outbound = this.applyForcedDeltas(outbound);
+
+                // --- OPTIMIZATION: FILTER PAYLOAD ---
+                // Only send stocks that the Aviator Game Loop is interested in (Active + Queue)
+                try {
+                  const filterKey = `aviator:${room}:filter`; // Matches getAviatorMarketFilterKey
+                  const filterRaw = await this.client.get(filterKey);
+
+                  if (filterRaw && outbound.symbols) {
+                    const interestedStocks = JSON.parse(filterRaw) as string[];
+                    const filteredSymbols: Record<string, any> = {};
+                    let count = 0;
+
+                    for (const stock of interestedStocks) {
+                      if (outbound.symbols[stock]) {
+                        filteredSymbols[stock] = outbound.symbols[stock];
+                        count++;
+                      }
+                    }
+
+                    // Only replace if we actually found stocks, otherwise fallback to full (safety)
+                    if (count > 0) {
+                      outbound.symbols = filteredSymbols;
+                    }
+                  }
+                } catch (e) {
+                  // Ignore filter errors, proceed with full payload
+                }
+                // ------------------------------------
 
                 this.lastPayloadByMarket[room] = outbound;
                 const lastKey = getKeyForLastMarketSnapshot(room);

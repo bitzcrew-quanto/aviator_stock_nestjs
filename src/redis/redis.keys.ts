@@ -21,33 +21,28 @@ export const getTenantUpdatesChannel = (tenantId: string): string => {
     return `tenant:${tenantId}:updates`;
 };
 
-/**
- * Stores the current game phase, time left, and active round ID.
- * Structure: JSON { phase: 'BETTING', roundId: '...', timeLeft: 5000 }
- */
-export const getPlinkoStateKey = (room: string): string => {
-    return `plinko:${room}:state`;
+// --- Aviator Game Keys ---
+
+export const getAviatorStateKey = (room: string): string => {
+    return `aviator:${room}:state`;
 };
 
 /**
- * Stores the list of 20 active stocks selected for the current round.
- * Structure: JSON Array [ { symbol: 'AAPL', ... }, ... ]
+ * Hash storing all bets for a round.
+ * Key: "${userId}" -> Value: JSON Bet Object
  */
-export const getPlinkoStocksKey = (room: string): string => {
-    return `plinko:${room}:stocks`;
+export const getAviatorRoundBetsKey = (room: string, roundId: string): string => {
+    return `aviator:${room}:bets:${roundId}`;
 };
 
-/**
- * Hash storing all bets for a specific round.
- * Key: userId, Value: JSON { amount, stock, timestamp }
- */
-export const getPlinkoRoundBetsKey = (room: string, roundId: string): string => {
-    return `plinko:${room}:bets:${roundId}`;
+export const getAviatorHistoryKey = (room: string): string => {
+    return `aviator:${room}:history`;
 };
 
-/**
- * (Optional) Key for history verification or audit
- */
-export const getPlinkoRoundResultKey = (room: string, roundId: string): string => {
-    return `plinko:${room}:result:${roundId}`;
+export const getAviatorCrashPointKey = (room: string, roundId: string): string => {
+    return `aviator:${room}:crash:${roundId}`;
+};
+
+export const getAviatorMarketFilterKey = (room: string): string => {
+    return `aviator:${room}:filter`;
 };

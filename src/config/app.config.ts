@@ -25,32 +25,21 @@ const createRedisConfig = (prefix: string) => ({
     tlsCaCertBase64: process.env[`${prefix}_REDIS_TLS_CA_CERT`],            // optional base64-encoded CA PEM
 });
 
-const parseMultipliers = (raw: string | undefined): number[] => {
-    if (!raw || raw.trim() === '') return [1, 1.2, 1.5, 2, 3, 5];
 
-    try {
-        const asJson = JSON.parse(raw);
-        if (Array.isArray(asJson)) {
-            return asJson.map((v) => Number(v)).filter((v) => Number.isFinite(v));
-        }
-    } catch { }
-    return raw
-        .split(',')
-        .map((s) => Number(s.trim()))
-        .filter((v) => Number.isFinite(v));
-};
 
 export default registerAs('app', () => ({
     env: process.env.NODE_ENV!,
     port: parseInt(process.env.PORT || '3000', 10),
-    subscribeChannels: process.env.SUBSCRIBE_CHANNELS!.split(',').map((c) => c.trim()).filter(Boolean),
+    subscribeChannels: process.env.SUBSCRIBE_CHANNELS!.split(',').map((c) => c.trim()).filter(Boolean), // These are the Game Rooms
     corsOrigin: process.env.CORS_ORIGIN || '*',
-    multipliers: parseMultipliers(process.env.MULTIPLIER),
-    gameName: process.env.GAME_NAME!,
-    desiredRtp: parseFloat(process.env.DESIRED_RTP!),
-    thresholdPlayCount: parseInt(process.env.THRESHOLD_PLAYCOUNT!, 10),
 
-    // HQ Service Configuration̋
+    // Aviator Game Configuration
+    aviator: {
+        bettingDurationMs: parseInt(process.env.AVIATOR_BETTING_DURATION_MS || '6000', 10),
+        postCrashDurationMs: parseInt(process.env.AVIATOR_POST_CRASH_DURATION_MS || '3000', 10),
+    },
+
+    // HQ Service Configuration
     hqServiceUrl: process.env.HQ_SERVICE_URL!,
     hqServiceTimeout: parseInt(process.env.HQ_SERVICE_TIMEOUT || '5000', 10),
 
