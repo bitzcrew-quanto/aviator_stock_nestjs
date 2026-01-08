@@ -4,6 +4,7 @@ import type { ConfigType } from '@nestjs/config';
 import { EventsGateway } from '../../../events/events.gateway';
 import { RedisService } from '../../../redis/redis.service';
 import { HttpService } from 'src/http/http.service';
+import { MarketStatusService } from 'src/markets/market-status.service';
 import { getAviatorStateKey, getAviatorRoundBetsKey, getAviatorCrashPointKey, getAviatorMarketFilterKey, getAviatorHistoryKey } from '../../../redis/redis.keys';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -21,6 +22,7 @@ export interface AviatorState {
     nextPhaseTime?: number;
     activeStock?: string;
     futureStocks?: string[];
+    startPrice?: number;
 }
 
 import * as os from 'os';
@@ -34,15 +36,17 @@ export class AviatorGameLoopService implements OnModuleInit, OnModuleDestroy {
 
     private readonly BETTING_DURATION_MS: number;
     private readonly POST_CRASH_DURATION_MS: number;
-    private readonly TICK_RATE_MS = 200; // 5Hz updates (Optimized for CPU)
+    private readonly TICK_RATE_MS = 200;
     private readonly GROWTH_RATE = 0.00006;
-    private readonly CRASH_TOLERANCE = -0.0005; // Slightly Increased Tolerance (0.05%)
-    private readonly GRACE_PERIOD_MS = 2000; // 2 Seconds Immunity on Takeoff
+    private readonly CRASH_TOLERANCE = -0.0005;
+    private readonly GRACE_PERIOD_MS = 2000;
+    private readonly STALE_DATA_THRESHOLD_MS = 5000;
 
     constructor(
         private readonly redisService: RedisService,
         private readonly eventsGateway: EventsGateway,
         private readonly httpService: HttpService,
+        private readonly marketStatusService: MarketStatusService,
         @Inject(appConfig.KEY) private readonly config: ConfigType<typeof appConfig>,
     ) {
         this.BETTING_DURATION_MS = this.config.aviator.bettingDurationMs;
@@ -63,6 +67,15 @@ export class AviatorGameLoopService implements OnModuleInit, OnModuleDestroy {
 
     private async runGameLoop(room: string) {
         if (!this.active) return;
+
+        // Check Market Status
+        if (!this.marketStatusService.isMarketOpen(room)) {
+            // Market is Closed. Sleep for 60s and retry.
+            // this.logger.debug(`Market ${room} is CLOSED. Waiting...`);
+            this.eventsGateway.broadcastMarketStatus(room, 'CLOSED');
+            this.scheduleNext(room, 60000, () => this.runGameLoop(room));
+            return;
+        }
 
         // Leader Election: Try to acquire lock for 10 seconds (TTL)
         // If we get it, we are the leader for this tick.
@@ -211,15 +224,45 @@ export class AviatorGameLoopService implements OnModuleInit, OnModuleDestroy {
     }
 
     private async startFlyingPhase(room: string, roundId: string) {
+        let startPrice = 0;
+        const marketData = this.redisService.getLastMarketPayload(room);
+        const currentState = await this.redisService.get(getAviatorStateKey(room));
+        if (marketData && currentState) {
+            const stateObj = JSON.parse(currentState);
+            const activeStock = stateObj.activeStock;
+            if (activeStock && marketData.symbols && marketData.symbols[activeStock]) {
+                startPrice = marketData.symbols[activeStock].price;
+            }
+        }
+
         const state: AviatorState = {
             phase: GamePhase.FLYING,
             roundId,
             startTime: Date.now(),
-            multiplier: 1.00
+            multiplier: 1.00,
+            // Carry over stock info so we don't lose it
+            activeStock: marketData?.symbols ? (JSON.parse(currentState!).activeStock) : undefined,
+            // Ideally we should just update the existing state object instead of recreating it entirely, 
+            // but to be safe let's just grab activeStock from Redis state if possible or rely on the fact that updateFlying reads it? 
+            // Actually updateFlying reads 'currentState' passed to it. 
+            // Let's ensure 'activeStock' is preserved.
+            // BETTER: Read Full Previous State
         };
 
-        this.logger.log(`[${room}] Took Off! Watching for negative delta...`);
-        await this.saveAndBroadcastState(room, state);
+        // Let's refactor slightly to be safer
+        const rawPrev = await this.redisService.get(getAviatorStateKey(room));
+        const prev = rawPrev ? JSON.parse(rawPrev) : {};
+
+        const flyingState: AviatorState = {
+            ...prev,
+            phase: GamePhase.FLYING,
+            startTime: Date.now(),
+            multiplier: 1.00,
+            startPrice: startPrice > 0 ? startPrice : undefined
+        };
+
+        this.logger.log(`[${room}] Took Off! Stock: ${flyingState.activeStock} @ ${startPrice}`);
+        await this.saveAndBroadcastState(room, flyingState);
 
         this.runGameLoop(room);
     }
@@ -236,24 +279,41 @@ export class AviatorGameLoopService implements OnModuleInit, OnModuleDestroy {
         let shouldCrash = false;
 
         if (marketData && marketData.symbols) {
-            const activeStock = currentState.activeStock;
 
-            if (activeStock && marketData.symbols[activeStock]) {
-                const stockInfo = marketData.symbols[activeStock];
-                // Crash ONLY if the Active Stock drops below tolerance
-                if (stockInfo.delta < this.CRASH_TOLERANCE) {
-                    shouldCrash = true;
-                    this.logger.log(`[${room}] Stock ${activeStock} Dropped! Delta ${stockInfo.delta}. Crashing...`);
-                }
-            } else {
-                // Active stock missing from payload? Maybe market closed or API issue.
-                // We can either crash (safe) or ignore (ride). 
-                // Let's safe crash to prevent issues.
+            // --- STALE DATA CHECK ---
+            const dataAge = now - Number(marketData.timestamp || 0);
+            if (dataAge > this.STALE_DATA_THRESHOLD_MS) {
                 shouldCrash = true;
-                this.logger.warn(`[${room}] Active Stock ${activeStock} missing from market feed. Safety Crash.`);
+                this.logger.warn(`[${room}] Market Data STALE (Age: ${dataAge}ms). Safety Crash.`);
+            } else {
+                const activeStock = currentState.activeStock;
+
+                if (activeStock && marketData.symbols[activeStock]) {
+                    const stockInfo = marketData.symbols[activeStock];
+                    const currentPrice = stockInfo.price;
+                    const startPrice = currentState.startPrice || currentPrice; // Fallback if missing
+
+                    // --- CUMULATIVE DELTA LOGIC ---
+                    // Compare Current Price vs Takeoff Price
+                    // Formula: (Current - Start) / Start
+                    const drift = (currentPrice - startPrice) / startPrice;
+
+                    // Crash if Total Drift is below tolerance (Net Negative)
+                    if (drift < this.CRASH_TOLERANCE) {
+                        shouldCrash = true;
+                        this.logger.log(`[${room}] Stock ${activeStock} Tanked! Drift: ${(drift * 100).toFixed(4)}% (Price: ${startPrice} -> ${currentPrice}). Crashing...`);
+                    }
+                } else {
+                    // Active stock missing from payload? Maybe market closed or API issue.
+                    // We can either crash (safe) or ignore (ride). 
+                    // Let's safe crash to prevent issues.
+                    shouldCrash = true;
+                    this.logger.warn(`[${room}] Active Stock ${activeStock} missing from market feed. Safety Crash.`);
+                }
             }
 
         } else {
+            // No market data at all
             shouldCrash = true;
             this.logger.warn(`[${room}] No Market Data available. Safety Crash.`);
         }
@@ -278,6 +338,28 @@ export class AviatorGameLoopService implements OnModuleInit, OnModuleDestroy {
             // Update state
             currentState.multiplier = newMultiplier;
             await this.redisService.set(getAviatorStateKey(room), JSON.stringify(currentState), 30);
+
+            // VERIFICATION LOGGING: Show drift while flying
+            const activeStock = currentState.activeStock;
+            if (activeStock && marketData && marketData.symbols && marketData.symbols[activeStock]) {
+                const stockInfo = marketData.symbols[activeStock];
+                const currentPrice = stockInfo.price;
+                // Ensure startPrice is valid, fallback to current if 0 or undefined
+                const startPrice = (currentState.startPrice && currentState.startPrice > 0) ? currentState.startPrice : currentPrice;
+
+                let drift = 0;
+                if (startPrice > 0) {
+                    drift = (currentPrice - startPrice) / startPrice;
+                }
+
+                this.logger.log(`[${room}] ✈️ ${newMultiplier}x | Stock: ${activeStock} | ${startPrice} -> ${currentPrice} | Drift: ${(drift * 100).toFixed(4)}%`);
+            } else {
+                if (!activeStock) {
+                    this.logger.error(`[${room}] MISSING ACTIVE STOCK in Flight State. Aborting Log. State: ${JSON.stringify(currentState)}`);
+                } else if (!marketData || !marketData.symbols || !marketData.symbols[activeStock]) {
+                    // this.logger.warn(`[${room}] Active Stock ${activeStock} not found in market payload.`);
+                }
+            }
 
             this.eventsGateway.server.to(room).emit('game:fly', {
                 multiplier: newMultiplier

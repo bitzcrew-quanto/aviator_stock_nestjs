@@ -488,11 +488,11 @@ export class RedisService implements OnModuleDestroy, OnModuleInit {
           ? Number(lastUpdatedAtRaw)
           : nowSec;
 
-        const rawDelta = previousPrice !== null ? price - previousPrice : 0;
-        let delta = Number(rawDelta.toFixed(2));
-
-        if (delta === 0 && rawDelta !== 0) {
-          delta = rawDelta > 0 ? 0.01 : -0.01;
+        let delta = 0;
+        if (previousPrice !== null && previousPrice !== 0 && Number.isFinite(price)) {
+          const change = price - previousPrice;
+          const rawPct = change / previousPrice;
+          delta = Number(rawPct.toFixed(6));
         }
 
         outSymbols[symbol] = { price, previousPrice, lastUpdatedAt, delta };

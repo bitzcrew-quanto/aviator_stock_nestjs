@@ -107,15 +107,14 @@ parentPort?.on('message', (raw: unknown) => {
             const lastUpdatedAt =
                 toUnixSecondsOptional((snap as any).lastUpdatedAt) ?? currentTs;
 
-            const rawDelta =
-                previousPrice !== null && Number.isFinite(price)
-                    ? price - previousPrice
-                    : 0;
-            let delta = Number(rawDelta.toFixed(2));
-
-            // Force minimum visibility for tiny changes
-            if (delta === 0 && rawDelta !== 0) {
-                delta = rawDelta > 0 ? 0.01 : -0.01;
+            let delta = 0;
+            if (previousPrice !== null && previousPrice !== 0 && Number.isFinite(price)) {
+                // Calculate Percentage Change: (Current - Previous) / Previous
+                // Example: 100 -> 99 = -0.01 (-1%)
+                const change = price - previousPrice;
+                const rawPct = change / previousPrice;
+                // Keep precision (4 decimals = 0.01%, 6 decimals = 0.0001%)
+                delta = Number(rawPct.toFixed(6));
             }
 
             enriched.symbols[symbol] = {
