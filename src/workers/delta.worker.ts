@@ -5,7 +5,8 @@ import { SymbolSnapshot } from 'src/redis/dto/market-data.dto';
 /** What the worker receives: market-level snapshots with raw per-symbol readings */
 type IncomingSymbol = {
     price: number;
-    lastUpdatedAt?: number; // optional in case source omits; we'll fall back to batch timestamp
+    previousPrice?: number; 
+    lastUpdatedAt?: number;
 };
 
 type IncomingMarketSnapshot = {
@@ -99,7 +100,9 @@ parentPort?.on('message', (raw: unknown) => {
         };
 
         for (const [symbol, snap] of Object.entries(currSymbols)) {
-            const before = prevSymbols[symbol]?.price;
+         
+            const before = snap.previousPrice ?? prevSymbols[symbol]?.price;
+
             const previousPrice =
                 typeof before === 'number' && Number.isFinite(before) ? before : null;
 
@@ -107,13 +110,13 @@ parentPort?.on('message', (raw: unknown) => {
             const lastUpdatedAt =
                 toUnixSecondsOptional((snap as any).lastUpdatedAt) ?? currentTs;
 
-            let delta = 0;
-            if (previousPrice !== null && previousPrice !== 0 && Number.isFinite(price)) {
-                // Calculate Percentage Change: ((Current - Previous) / Previous) * 100
-                // Example: 100 -> 99 = -1.00 (-1%)
+            let delta = (snap as any).delta || 0; // Prefer incoming delta
+
+            // If incoming delta is 0 or missing, calculate our own (Percentage Change)
+            if (delta === 0 && previousPrice !== null && previousPrice !== 0 && Number.isFinite(price)) {
+                // Calculate Percentage Change: ((Current - Baseline) / Baseline) * 100
                 const change = price - previousPrice;
                 const rawPct = (change / previousPrice) * 100;
-                // Keep precision standard
                 delta = Number(rawPct.toFixed(4));
             }
 

@@ -499,8 +499,9 @@ export class RedisService implements OnModuleDestroy, OnModuleInit {
           ? Number(lastUpdatedAtRaw)
           : nowSec;
 
-        let delta = 0;
-        if (previousPrice !== null && previousPrice !== 0 && Number.isFinite(price)) {
+        let delta = (snap as any).delta || 0; 
+
+        if (delta === 0 && previousPrice !== null && previousPrice !== 0 && Number.isFinite(price)) {
           const change = price - previousPrice;
           const rawPct = (change / previousPrice) * 100;
           delta = Number(rawPct.toFixed(4));
