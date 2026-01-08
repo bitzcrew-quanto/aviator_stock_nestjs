@@ -35,7 +35,6 @@ export class AviatorGameLoopService implements OnModuleInit, OnModuleDestroy {
     private readonly BETTING_DURATION_MS: number;
     private readonly POST_CRASH_DURATION_MS: number;
     private readonly TICK_RATE_MS = 200; // 5Hz updates (Optimized for CPU)
-    private readonly TICK_RATE_MS = 200; // 5Hz updates (Optimized for CPU)
     private readonly GROWTH_RATE = 0.00006;
     private readonly CRASH_TOLERANCE = -0.0005; // Slightly Increased Tolerance (0.05%)
     private readonly GRACE_PERIOD_MS = 2000; // 2 Seconds Immunity on Takeoff
