@@ -24,6 +24,7 @@ export class RedisService implements OnModuleDestroy, OnModuleInit {
   private stateSubscriberReady = false;
   private clientReady = false;
   private lastSubscribeError?: string;
+  private lastUpdateTimes: Record<string, number> = {};
 
   constructor(
     @Inject(appConfig.KEY) private readonly config: ConfigType<typeof appConfig>,
@@ -310,6 +311,16 @@ export class RedisService implements OnModuleDestroy, OnModuleInit {
             if (!parsed.symbols) return;
 
             const stockList = parsed.symbols ? Object.keys(parsed.symbols).join(', ') : 'No stocks';
+
+            // THROTTLE: Only process 1 update per second per room
+            // This ensures "Delta" is calculated over a 1s window (making it more meaningful)
+            // and allows the frontend to be calmer.
+            const now = Date.now();
+            if (this.lastUpdateTimes[channel] && now - this.lastUpdateTimes[channel] < 1000) {
+              return;
+            }
+            this.lastUpdateTimes[channel] = now;
+
             this.logger.log(`Received market snapshot for ${channel} | Stocks: ${stockList}`);
             const room = channel;
             const previous = this.lastPayloadByMarket[room];

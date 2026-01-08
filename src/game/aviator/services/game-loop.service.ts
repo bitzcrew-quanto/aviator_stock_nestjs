@@ -172,7 +172,6 @@ export class AviatorGameLoopService implements OnModuleInit, OnModuleDestroy {
         const roundId = uuidv4();
         const endTime = Date.now() + this.BETTING_DURATION_MS;
 
-        // --- Stock Queue Logic ---
         const queueKey = `aviator:queue:${room}`;
         const marketData = this.redisService.getLastMarketPayload(room);
         let availableStocks: string[] = [];
@@ -181,7 +180,6 @@ export class AviatorGameLoopService implements OnModuleInit, OnModuleDestroy {
             availableStocks = Object.keys(marketData.symbols);
         }
 
-        // 1. Ensure Queue has 5 items
         const currentQueueLen = await this.redisService.getStateClient().lLen(queueKey);
         const needed = 5 - currentQueueLen;
 
@@ -192,15 +190,12 @@ export class AviatorGameLoopService implements OnModuleInit, OnModuleDestroy {
             }
         }
 
-        // 2. Pop the Active Stock for this round
         let activeStock = await this.redisService.getStateClient().lPop(queueKey);
 
-        // Fallback if queue failed or empty (e.g. no market data yet)
         if (!activeStock) {
-            activeStock = availableStocks.length > 0 ? availableStocks[0] : 'BTC'; // Default fallback
+            activeStock = availableStocks.length > 0 ? availableStocks[0] : 'BTC'; 
         }
 
-        // 3. Peek at future stocks for UI
         const futureStocks = await this.redisService.getStateClient().lRange(queueKey, 0, 4);
 
         // 4. Update Filter Key for RedisService to reduce bandwidth
@@ -335,34 +330,30 @@ export class AviatorGameLoopService implements OnModuleInit, OnModuleDestroy {
         if (shouldCrash) {
             await this.crash(room, currentState.roundId, newMultiplier);
         } else {
-            // Update state
-            currentState.multiplier = newMultiplier;
+           currentState.multiplier = newMultiplier;
             await this.redisService.set(getAviatorStateKey(room), JSON.stringify(currentState), 30);
 
-            // VERIFICATION LOGGING: Show drift while flying
             const activeStock = currentState.activeStock;
+            let drift = 0; 
+
             if (activeStock && marketData && marketData.symbols && marketData.symbols[activeStock]) {
                 const stockInfo = marketData.symbols[activeStock];
                 const currentPrice = stockInfo.price;
-                // Ensure startPrice is valid, fallback to current if 0 or undefined
                 const startPrice = (currentState.startPrice && currentState.startPrice > 0) ? currentState.startPrice : currentPrice;
 
-                let drift = 0;
                 if (startPrice > 0) {
                     drift = (currentPrice - startPrice) / startPrice;
                 }
 
-                this.logger.log(`[${room}] ✈️ ${newMultiplier}x | Stock: ${activeStock} | ${startPrice} -> ${currentPrice} | Drift: ${(drift * 100).toFixed(4)}%`);
             } else {
                 if (!activeStock) {
-                    this.logger.error(`[${room}] MISSING ACTIVE STOCK in Flight State. Aborting Log. State: ${JSON.stringify(currentState)}`);
-                } else if (!marketData || !marketData.symbols || !marketData.symbols[activeStock]) {
-                    // this.logger.warn(`[${room}] Active Stock ${activeStock} not found in market payload.`);
+                    // this.logger.error(`[${room}] MISSING ACTIVE STOCK in Flight State.`);
                 }
             }
 
             this.eventsGateway.server.to(room).emit('game:fly', {
-                multiplier: newMultiplier
+                multiplier: newMultiplier,
+                delta: drift 
             });
 
             this.scheduleNext(room, this.TICK_RATE_MS, () => this.runGameLoop(room));
