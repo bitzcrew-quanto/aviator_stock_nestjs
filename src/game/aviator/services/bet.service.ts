@@ -188,4 +188,10 @@ export class AviatorBetService {
         const rawHistory = await this.redisService.getStateClient().lRange(historyKey, 0, 19); // Last 20
         return rawHistory.map(item => JSON.parse(item));
     }
+
+    async getCurrentState(room: string): Promise<AviatorState | null> {
+        const stateKey = getAviatorStateKey(room);
+        const raw = await this.redisService.get(stateKey);
+        return raw ? JSON.parse(raw) : null;
+    }
 }

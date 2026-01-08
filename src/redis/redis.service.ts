@@ -317,12 +317,14 @@ export class RedisService implements OnModuleDestroy, OnModuleInit {
 
             this.deltaWorker.enrichWithDelta(current, previous)
               .then(async (enriched) => {
-                let outbound: MarketDataPayload = 'error' in enriched ? current : enriched;
+                let fullPayload: MarketDataPayload = 'error' in enriched ? current : enriched;
 
-                // Apply any forced deltas (e.g. from game logic mines)
-                outbound = this.applyForcedDeltas(outbound);
+                fullPayload = this.applyForcedDeltas(fullPayload);
 
-                // --- OPTIMIZATION: FILTER PAYLOAD ---
+                this.lastPayloadByMarket[room] = fullPayload;
+
+                const outbound = { ...fullPayload, symbols: { ...fullPayload.symbols } };
+
                 // Only send stocks that the Aviator Game Loop is interested in (Active + Queue)
                 try {
                   const filterKey = `aviator:${room}:filter`; // Matches getAviatorMarketFilterKey
@@ -350,20 +352,22 @@ export class RedisService implements OnModuleDestroy, OnModuleInit {
                 }
                 // ------------------------------------
 
-                this.lastPayloadByMarket[room] = outbound;
-                const lastKey = getKeyForLastMarketSnapshot(room);
-                (this.client).set(lastKey, JSON.stringify(outbound), { EX: 30 }).catch(() => undefined);
                 this.eventsGateway.broadcastMarketDataToRoom(room, outbound);
               })
               .catch((err) => {
-                let outbound = this.enrichInline(current, previous);
+                let fullPayload = this.enrichInline(current, previous);
 
                 // Apply any forced deltas here too
-                outbound = this.applyForcedDeltas(outbound);
+                fullPayload = this.applyForcedDeltas(fullPayload);
 
-                this.lastPayloadByMarket[room] = outbound;
+                this.lastPayloadByMarket[room] = fullPayload;
+
+                // Clone for broadcast (if we wanted to filter here too, but inline is fallback, let's keep it simple or filtered? Let's keep it safe: send full or filter?
+                // For consistency, we should filter. But to keep code simple, let's just send full on error fallback.)
+                const outbound = fullPayload; // No filter on fallback
+
                 const lastKey = getKeyForLastMarketSnapshot(room);
-                (this.client).set(lastKey, JSON.stringify(outbound), { EX: 30 }).catch(() => undefined);
+                (this.client).set(lastKey, JSON.stringify(fullPayload), { EX: 30 }).catch(() => undefined);
                 this.logger.warn(`Delta worker failed, used inline enrichment for room=${room}: ${err instanceof Error ? err.message : String(err)}`);
                 this.eventsGateway.broadcastMarketDataToRoom(room, outbound);
               });

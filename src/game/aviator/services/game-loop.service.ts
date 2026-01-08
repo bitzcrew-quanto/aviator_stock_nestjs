@@ -36,6 +36,7 @@ export class AviatorGameLoopService implements OnModuleInit, OnModuleDestroy {
     private readonly POST_CRASH_DURATION_MS: number;
     private readonly TICK_RATE_MS = 200; // 5Hz updates (Optimized for CPU)
     private readonly GROWTH_RATE = 0.00006;
+    private readonly CRASH_TOLERANCE = -0.0002; // Allow small negative drops (0.02%) before crashing
 
     constructor(
         private readonly redisService: RedisService,
@@ -238,8 +239,8 @@ export class AviatorGameLoopService implements OnModuleInit, OnModuleDestroy {
 
             if (activeStock && marketData.symbols[activeStock]) {
                 const stockInfo = marketData.symbols[activeStock];
-                // Crash ONLY if the Active Stock drops
-                if (stockInfo.delta < 0) {
+                // Crash ONLY if the Active Stock drops below tolerance
+                if (stockInfo.delta < this.CRASH_TOLERANCE) {
                     shouldCrash = true;
                     this.logger.log(`[${room}] Stock ${activeStock} Dropped! Delta ${stockInfo.delta}. Crashing...`);
                 }

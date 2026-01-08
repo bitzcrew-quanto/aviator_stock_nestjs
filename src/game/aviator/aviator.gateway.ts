@@ -97,8 +97,17 @@ export class AviatorGateway {
         // OR inject RedisService into Gateway.
 
         // Let's add getHistory to BetService for cleanliness.
+        // Let's add getHistory to BetService for cleanliness.
         const history = await this.betService.getHistory(room);
         client.emit('game:history', history);
+
+        // --- NEW: Send Current Game State (Phase/Timer) ---
+        const currentState = await this.betService.getCurrentState(room);
+        if (currentState) {
+            const payload = { ...currentState, timestamp: Date.now() };
+            client.emit('game:phase', payload);
+        }
+
 
         return { status: 'ok', joined: room };
     }
