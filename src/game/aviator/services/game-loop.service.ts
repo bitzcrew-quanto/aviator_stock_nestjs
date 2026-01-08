@@ -7,6 +7,7 @@ import { HttpService } from 'src/http/http.service';
 import { MarketStatusService } from 'src/markets/market-status.service';
 import { getAviatorStateKey, getAviatorRoundBetsKey, getAviatorCrashPointKey, getAviatorMarketFilterKey, getAviatorHistoryKey } from '../../../redis/redis.keys';
 import { v4 as uuidv4 } from 'uuid';
+import { AviatorBetService } from './bet.service';
 
 export enum GamePhase {
     BETTING = 'BETTING',
@@ -47,6 +48,7 @@ export class AviatorGameLoopService implements OnModuleInit, OnModuleDestroy {
         private readonly eventsGateway: EventsGateway,
         private readonly httpService: HttpService,
         private readonly marketStatusService: MarketStatusService,
+        private readonly betService: AviatorBetService,
         @Inject(appConfig.KEY) private readonly config: ConfigType<typeof appConfig>,
     ) {
         this.BETTING_DURATION_MS = this.config.aviator.bettingDurationMs;
@@ -354,6 +356,14 @@ export class AviatorGameLoopService implements OnModuleInit, OnModuleDestroy {
             this.eventsGateway.server.to(room).emit('game:fly', {
                 multiplier: newMultiplier,
                 delta: drift
+            });
+
+            // CHECK AUTO CASHOUTS
+            // Use fire-and-forget to not block the loop? 
+            // Better to await to ensure consistency, but if it takes too long, loop drags.
+            // For now, no await to keep tick rate smooth. 
+            this.betService.processAutoCashouts(room, newMultiplier).catch(err => {
+                this.logger.error(`AutoCashout Process Error: ${err.message}`);
             });
 
             this.scheduleNext(room, this.TICK_RATE_MS, () => this.runGameLoop(room));

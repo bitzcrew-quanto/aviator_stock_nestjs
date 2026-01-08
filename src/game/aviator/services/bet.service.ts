@@ -10,7 +10,7 @@ import { HqBetRequest } from 'src/http/interfaces';
 export interface AviatorBet {
     playerId: string;
     amount: number;
-    betType: string; // '1' or '2' (Side)
+    betType: string; 
     autoCashout?: number;
     cashedOutAt?: number;
     winAmount?: number;
@@ -55,8 +55,6 @@ export class AviatorBetService {
                 betAmount: amount,
                 currency: session.currency || 'USD',
                 transactionId: uuidv4(),
-                playerId: playerId,
-                tenantId: session.tenantPublicId
             });
         } catch (err) {
             this.logger.error(`Bet placement failed at HQ: ${err.message}`);
@@ -67,7 +65,7 @@ export class AviatorBetService {
             playerId,
             amount,
             betType,
-            autoCashout,
+            autoCashout: (autoCashout || 0) > 0 ? autoCashout : undefined,
             currency: session.currency || 'USD',
             sessionToken: session.token,
             roundId: state.roundId
@@ -193,5 +191,41 @@ export class AviatorBetService {
         const stateKey = getAviatorStateKey(room);
         const raw = await this.redisService.get(stateKey);
         return raw ? JSON.parse(raw) : null;
+    }
+
+    async processAutoCashouts(room: string, currentMultiplier: number) {
+        const stateKey = getAviatorStateKey(room);
+        const rawState = await this.redisService.get(stateKey);
+        if (!rawState) return;
+        const state: AviatorState = JSON.parse(rawState);
+
+        if (state.phase !== GamePhase.FLYING) return;
+
+        const betsKey = getAviatorRoundBetsKey(room, state.roundId);
+
+        const allBetsRaw = await this.redisService.getStateClient().hGetAll(betsKey);
+
+        for (const [field, rawBet] of Object.entries(allBetsRaw)) {
+            try {
+                const bet: AviatorBet = JSON.parse(rawBet);
+
+                if (bet.cashedOutAt) continue;
+                if (!bet.autoCashout || bet.autoCashout <= 1.0) continue;
+
+                if (currentMultiplier >= bet.autoCashout) {
+                    this.logger.log(`Auto-Cashout Triggered: ${bet.playerId} @ ${bet.autoCashout}x`);
+
+                    // Re-use logic: We can call this.cashOut but we need to pass params.
+                    // Or purely simpler: update bet here to avoid re-fetching state.
+                    // Let's call this.cashOut to reuse event logic etc.
+                    // But cashOut does extra checks. Let's do direct implementation for speed?
+                    // No, stick to reusing cashOut to ensure consistency (HTTP calls etc).
+
+                    await this.cashOut(room, bet.playerId, bet.betType);
+                }
+            } catch (e) {
+                this.logger.error(`Error processing auto-cashout for bet ${field}: ${e.message}`);
+            }
+        }
     }
 }

@@ -306,20 +306,18 @@ export class RedisService implements OnModuleDestroy, OnModuleInit {
         channels,
         (message: string, channel: string) => {
           try {
-            const parsed = JSON.parse(message);
-            // Ignore messages that don't look like market data (e.g. Aviator game state)
-            if (!parsed.symbols) return;
-
-            const stockList = parsed.symbols ? Object.keys(parsed.symbols).join(', ') : 'No stocks';
-
             // THROTTLE: Only process 1 update per second per room
-            // This ensures "Delta" is calculated over a 1s window (making it more meaningful)
-            // and allows the frontend to be calmer.
             const now = Date.now();
             if (this.lastUpdateTimes[channel] && now - this.lastUpdateTimes[channel] < 1000) {
               return;
             }
             this.lastUpdateTimes[channel] = now;
+
+            const parsed = JSON.parse(message);
+
+            if (!parsed.symbols) return;
+
+            const stockList = parsed.symbols ? Object.keys(parsed.symbols).join(', ') : 'No stocks';
 
             this.logger.log(`Received market snapshot for ${channel} | Stocks: ${stockList}`);
             const room = channel;
@@ -499,7 +497,7 @@ export class RedisService implements OnModuleDestroy, OnModuleInit {
           ? Number(lastUpdatedAtRaw)
           : nowSec;
 
-        let delta = (snap as any).delta || 0; 
+        let delta = (snap as any).delta || 0;
 
         if (delta === 0 && previousPrice !== null && previousPrice !== 0 && Number.isFinite(price)) {
           const change = price - previousPrice;
