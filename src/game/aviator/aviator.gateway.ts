@@ -35,7 +35,7 @@ export class AviatorGateway {
             }
 
             const room = client.session.room;
-            const side = body.side || 'LEFT'; 
+            const side = body.side || 'LEFT';
 
             const sessionWithToken = {
                 ...client.session,
@@ -74,6 +74,25 @@ export class AviatorGateway {
             return { status: 'ok', winAmount: result.winAmount, multiplier: result.multiplier, side };
         } catch (error) {
             // this.logger.error(`Cashout failed: ${error.message}`);
+            return { status: 'error', message: error.message };
+        }
+    }
+
+    @SubscribeMessage('game:cancel')
+    async handleCancel(
+        @ConnectedSocket() client: AuthenticatedSocket,
+        @MessageBody() body: { side?: 'LEFT' | 'RIGHT' }
+    ) {
+        try {
+            if (!client.session) {
+                return { status: 'error', message: 'Unauthorized' };
+            }
+            const room = client.session.room;
+            const side = body?.side || 'LEFT';
+
+            await this.betService.cancelBet(room, client.session.tenantPlayerId, side);
+            return { status: 'ok', message: 'Bet cancelled' };
+        } catch (error) {
             return { status: 'error', message: error.message };
         }
     }

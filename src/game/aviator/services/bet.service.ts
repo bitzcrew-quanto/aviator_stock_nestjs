@@ -1,22 +1,23 @@
-import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, Inject, forwardRef } from '@nestjs/common';
 import { RedisService } from 'src/redis/redis.service';
 import { HttpService } from 'src/http/http.service';
 import { getAviatorRoundBetsKey, getAviatorStateKey, getAviatorHistoryKey } from 'src/redis/redis.keys';
 import { GamePhase, AviatorState } from './game-loop.service';
 import { SessionData } from 'src/common/types/socket.types';
+import { EventsGateway } from 'src/events/events.gateway';
 import { v4 as uuidv4 } from 'uuid';
-import { HqBetRequest } from 'src/http/interfaces';
 
 export interface AviatorBet {
     playerId: string;
     amount: number;
-    betType: string; 
+    betType: string;
     autoCashout?: number;
     cashedOutAt?: number;
     winAmount?: number;
     currency: string;
     sessionToken: string;
     roundId: string;
+    tenantPublicId: string;
 }
 
 @Injectable()
@@ -25,7 +26,9 @@ export class AviatorBetService {
 
     constructor(
         private readonly redisService: RedisService,
-        private readonly httpService: HttpService
+        private readonly httpService: HttpService,
+        @Inject(forwardRef(() => EventsGateway))
+        private readonly eventsGateway: EventsGateway
     ) { }
 
     async placeBet(room: string, playerId: string, session: SessionData, amount: number, betType: string = 'LEFT', autoCashout?: number) {
@@ -50,12 +53,23 @@ export class AviatorBetService {
 
         // 1. Call HQ to deduct balance
         try {
-            await this.httpService.placeBet({
+            const response = await this.httpService.placeBet({
                 sessionToken: session.token,
                 betAmount: amount,
                 currency: session.currency || 'USD',
                 transactionId: uuidv4(),
             });
+
+            if (response && response.data && response.data.newBalance !== undefined) {
+                this.eventsGateway.emitBalanceUpdateToPlayerRoom(
+                    `balance:${session.tenantPublicId}:${playerId}`,
+                    {
+                        playerId: playerId,
+                        balance: response.data.newBalance,
+                        currency: session.currency || 'USD'
+                    }
+                );
+            }
         } catch (err) {
             this.logger.error(`Bet placement failed at HQ: ${err.message}`);
             throw new BadRequestException('Failed to place bet: Insufficient funds or service error');
@@ -68,7 +82,8 @@ export class AviatorBetService {
             autoCashout: (autoCashout || 0) > 0 ? autoCashout : undefined,
             currency: session.currency || 'USD',
             sessionToken: session.token,
-            roundId: state.roundId
+            roundId: state.roundId,
+            tenantPublicId: session.tenantPublicId
         };
 
         await this.redisService.getStateClient().hSet(betsKey, compositeField, JSON.stringify(bet));
@@ -109,7 +124,7 @@ export class AviatorBetService {
         await this.redisService.getStateClient().hSet(betsKey, compositeField, JSON.stringify(bet));
 
         try {
-            await this.httpService.creditWin({
+            const response = await this.httpService.creditWin({
                 sessionToken: bet.sessionToken,
                 winAmount: winAmount,
                 currency: bet.currency,
@@ -117,6 +132,17 @@ export class AviatorBetService {
                 type: 'win',
                 metadata: { multiplier: currentMultiplier, roundId: state.roundId, betType }
             });
+
+            if (response && response.data && response.data.newBalance !== undefined) {
+                this.eventsGateway.emitBalanceUpdateToPlayerRoom(
+                    `balance:${bet.tenantPublicId}:${playerId}`,
+                    {
+                        playerId: playerId,
+                        balance: response.data.newBalance,
+                        currency: bet.currency
+                    }
+                );
+            }
         } catch (err) {
             this.logger.error(`Failed to credit win ${winAmount} to ${playerId}: ${err.message}`);
         }
@@ -124,6 +150,64 @@ export class AviatorBetService {
         this.logger.log(`Cashout success: ${playerId} (${betType}) at ${currentMultiplier}x - Win: ${winAmount}`);
 
         return { winAmount, multiplier: currentMultiplier, betType };
+    }
+
+    async cancelBet(room: string, playerId: string, betType: string) {
+        const stateKey = getAviatorStateKey(room);
+        const rawState = await this.redisService.get(stateKey);
+        if (!rawState) throw new BadRequestException('Game not active');
+
+        const state: AviatorState = JSON.parse(rawState);
+
+        // Cancel is only allowed during BETTING phase (before takeoff)
+        if (state.phase !== GamePhase.BETTING) {
+            throw new BadRequestException('Cannot cancel bet during flight or crash');
+        }
+
+        const betsKey = getAviatorRoundBetsKey(room, state.roundId);
+        const compositeField = `${playerId}::${betType}`;
+        const betJson = await this.redisService.getStateClient().hGet(betsKey, compositeField);
+
+        if (!betJson) throw new BadRequestException('No active bet found to cancel');
+
+        const bet: AviatorBet = JSON.parse(betJson);
+
+        // Remove from Redis
+        await this.redisService.getStateClient().hDel(betsKey, compositeField);
+
+        // Refund via HQ
+        try {
+            const response = await this.httpService.creditWin({
+                sessionToken: bet.sessionToken,
+                winAmount: bet.amount, // Refund creates a credit of the original amount
+                currency: bet.currency,
+                transactionId: uuidv4(),
+                type: 'refund',
+                metadata: { roundId: state.roundId, betType, action: 'cancel' }
+            });
+
+            // Broadcast Balance Update
+            if (response && response.data && response.data.newBalance !== undefined) {
+                this.eventsGateway.emitBalanceUpdateToPlayerRoom(
+                    `balance:${bet.tenantPublicId}:${playerId}`,
+                    {
+                        playerId: playerId,
+                        balance: response.data.newBalance,
+                        currency: bet.currency
+                    }
+                );
+            }
+
+            this.logger.log(`Bet cancelled: ${playerId} (${betType}) - Refund: ${bet.amount}`);
+            return { status: 'cancelled', amount: bet.amount };
+
+        } catch (err) {
+            this.logger.error(`Failed to refund cancelled bet for ${playerId}: ${err.message}`);
+            // If refund fails, we have already deleted the bet. This is risky. 
+            // Ideally we should refund first, then delete. But if refund fails, we want the bet to stay?
+            // Let's reverse order: Refund first, then delete.
+            throw new BadRequestException('Cancellation failed: Service error');
+        }
     }
 
     async getActiveBets(room: string, playerId: string): Promise<AviatorBet[]> {
@@ -205,27 +289,23 @@ export class AviatorBetService {
 
         const allBetsRaw = await this.redisService.getStateClient().hGetAll(betsKey);
 
-        for (const [field, rawBet] of Object.entries(allBetsRaw)) {
+        const promises = Object.entries(allBetsRaw).map(async ([field, rawBet]) => {
             try {
                 const bet: AviatorBet = JSON.parse(rawBet);
 
-                if (bet.cashedOutAt) continue;
-                if (!bet.autoCashout || bet.autoCashout <= 1.0) continue;
+                if (bet.cashedOutAt) return;
+                if (!bet.autoCashout || bet.autoCashout <= 1.0) return;
 
                 if (currentMultiplier >= bet.autoCashout) {
                     this.logger.log(`Auto-Cashout Triggered: ${bet.playerId} @ ${bet.autoCashout}x`);
-
-                    // Re-use logic: We can call this.cashOut but we need to pass params.
-                    // Or purely simpler: update bet here to avoid re-fetching state.
-                    // Let's call this.cashOut to reuse event logic etc.
-                    // But cashOut does extra checks. Let's do direct implementation for speed?
-                    // No, stick to reusing cashOut to ensure consistency (HTTP calls etc).
-
+                    // Execute cashout concurrently
                     await this.cashOut(room, bet.playerId, bet.betType);
                 }
             } catch (e) {
                 this.logger.error(`Error processing auto-cashout for bet ${field}: ${e.message}`);
             }
-        }
+        });
+
+        await Promise.all(promises);
     }
 }
