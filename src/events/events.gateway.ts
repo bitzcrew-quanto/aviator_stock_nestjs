@@ -39,7 +39,6 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
             if (!token) {
                 this.logger.warn(`Connection rejected: No token provided by socket ${client.id}`);
-                // Inform frontend before disconnecting
                 try {
                     client.emit('error', {
                         type: 'auth',
@@ -73,10 +72,8 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
             client.emit('updated_balance', { playerUpdatedBalance: parseFloat(client.session.currentBalance), currency: client.session.currency });
 
-            // Join market data room directly
             const roomToJoin = client.session.room;
 
-            // Check if market is open
             const isOpen = this.marketStatus.isMarketOpen(roomToJoin);
             if (!isOpen) {
                 this.logger.warn(`Connection rejected: Market ${roomToJoin} is closed for socket ${client.id}`);
@@ -92,6 +89,12 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
             }
 
             client.join(roomToJoin);
+
+            if (client.session.tenantPublicId && client.session.tenantPlayerId) {
+                const balanceRoom = `balance:${client.session.tenantPublicId}:${client.session.tenantPlayerId}`;
+                client.join(balanceRoom);
+                this.logger.debug(`Socket ${client.id} joined private balance room: ${balanceRoom}`);
+            }
 
             try {
                 const last = this.redisService.getLastMarketPayload(roomToJoin);
@@ -126,7 +129,6 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
                             JSON.stringify(currentSession)
                         );
                     } else {
-                        // The session has expired or was removed from Redis.
                         this.logger.warn(`Session ${sessionKey} expired during heartbeat check. Disconnecting client ${client.id}.`);
                         client.disconnect(true);
                     }
@@ -135,12 +137,9 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
                 }
             };
 
-            // Piggyback on the engine.io's heartbeat mechanism
             client.conn.on('heartbeat', updateSessionTimestamp);
 
             this.logger.log(`Client connected: ${client.id}, PlayerID: ${client.session.tenantPlayerId}, Tenant: ${tenantId}, Market Room: ${roomToJoin}, Balance Room: ${playerBalanceRoom}`);
-
-            // TODO: Restore Active Game State logic if applicable to Plinko
 
         } catch (err) {
             this.logger.error('Error during handleConnection authentication:', (err).message);

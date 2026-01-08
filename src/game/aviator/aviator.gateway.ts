@@ -124,7 +124,7 @@ export class AviatorGateway {
         const history = await this.betService.getHistory(room);
         client.emit('game:history', history);
 
-        // --- NEW: Send Current Game State (Phase/Timer) ---
+        // Send Current Game State (Phase/Timer) ---
         const currentState = await this.betService.getCurrentState(room);
         if (currentState) {
             const payload = { ...currentState, timestamp: Date.now() };
