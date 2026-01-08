@@ -35,13 +35,17 @@ export class AviatorGateway {
             }
 
             const room = client.session.room;
-            const side = body.side || 'LEFT'; // Default to LEFT if missing (backward compat)
+            const side = body.side || 'LEFT'; 
 
-            // BetService signature: (room, playerId, session, amount, betType, autoCashout)
+            const sessionWithToken = {
+                ...client.session,
+                token: client.session.token || client.handshake.auth.token
+            };
+
             await this.betService.placeBet(
                 room,
                 client.session.tenantPlayerId,
-                client.session,
+                sessionWithToken,
                 body.amount,
                 side,
                 body.autoCashOut
