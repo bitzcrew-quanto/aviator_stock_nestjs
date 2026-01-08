@@ -109,12 +109,12 @@ parentPort?.on('message', (raw: unknown) => {
 
             let delta = 0;
             if (previousPrice !== null && previousPrice !== 0 && Number.isFinite(price)) {
-                // Calculate Percentage Change: (Current - Previous) / Previous
-                // Example: 100 -> 99 = -0.01 (-1%)
+                // Calculate Percentage Change: ((Current - Previous) / Previous) * 100
+                // Example: 100 -> 99 = -1.00 (-1%)
                 const change = price - previousPrice;
-                const rawPct = change / previousPrice;
-                // Keep precision (4 decimals = 0.01%, 6 decimals = 0.0001%)
-                delta = Number(rawPct.toFixed(6));
+                const rawPct = (change / previousPrice) * 100;
+                // Keep precision standard
+                delta = Number(rawPct.toFixed(4));
             }
 
             enriched.symbols[symbol] = {

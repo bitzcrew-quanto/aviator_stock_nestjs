@@ -38,7 +38,7 @@ export class AviatorGameLoopService implements OnModuleInit, OnModuleDestroy {
     private readonly POST_CRASH_DURATION_MS: number;
     private readonly TICK_RATE_MS = 200;
     private readonly GROWTH_RATE = 0.00006;
-    private readonly CRASH_TOLERANCE = -0.0005;
+    private readonly CRASH_TOLERANCE = -0.05;
     private readonly GRACE_PERIOD_MS = 2000;
     private readonly STALE_DATA_THRESHOLD_MS = 5000;
 
@@ -193,7 +193,7 @@ export class AviatorGameLoopService implements OnModuleInit, OnModuleDestroy {
         let activeStock = await this.redisService.getStateClient().lPop(queueKey);
 
         if (!activeStock) {
-            activeStock = availableStocks.length > 0 ? availableStocks[0] : 'BTC'; 
+            activeStock = availableStocks.length > 0 ? availableStocks[0] : 'BTC';
         }
 
         const futureStocks = await this.redisService.getStateClient().lRange(queueKey, 0, 4);
@@ -330,11 +330,11 @@ export class AviatorGameLoopService implements OnModuleInit, OnModuleDestroy {
         if (shouldCrash) {
             await this.crash(room, currentState.roundId, newMultiplier);
         } else {
-           currentState.multiplier = newMultiplier;
+            currentState.multiplier = newMultiplier;
             await this.redisService.set(getAviatorStateKey(room), JSON.stringify(currentState), 30);
 
             const activeStock = currentState.activeStock;
-            let drift = 0; 
+            let drift = 0;
 
             if (activeStock && marketData && marketData.symbols && marketData.symbols[activeStock]) {
                 const stockInfo = marketData.symbols[activeStock];
@@ -342,7 +342,7 @@ export class AviatorGameLoopService implements OnModuleInit, OnModuleDestroy {
                 const startPrice = (currentState.startPrice && currentState.startPrice > 0) ? currentState.startPrice : currentPrice;
 
                 if (startPrice > 0) {
-                    drift = (currentPrice - startPrice) / startPrice;
+                    drift = ((currentPrice - startPrice) / startPrice) * 100;
                 }
 
             } else {
@@ -353,7 +353,7 @@ export class AviatorGameLoopService implements OnModuleInit, OnModuleDestroy {
 
             this.eventsGateway.server.to(room).emit('game:fly', {
                 multiplier: newMultiplier,
-                delta: drift 
+                delta: drift
             });
 
             this.scheduleNext(room, this.TICK_RATE_MS, () => this.runGameLoop(room));

@@ -502,8 +502,8 @@ export class RedisService implements OnModuleDestroy, OnModuleInit {
         let delta = 0;
         if (previousPrice !== null && previousPrice !== 0 && Number.isFinite(price)) {
           const change = price - previousPrice;
-          const rawPct = change / previousPrice;
-          delta = Number(rawPct.toFixed(6));
+          const rawPct = (change / previousPrice) * 100;
+          delta = Number(rawPct.toFixed(4));
         }
 
         outSymbols[symbol] = { price, previousPrice, lastUpdatedAt, delta };
