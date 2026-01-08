@@ -35,8 +35,10 @@ export class AviatorGameLoopService implements OnModuleInit, OnModuleDestroy {
     private readonly BETTING_DURATION_MS: number;
     private readonly POST_CRASH_DURATION_MS: number;
     private readonly TICK_RATE_MS = 200; // 5Hz updates (Optimized for CPU)
+    private readonly TICK_RATE_MS = 200; // 5Hz updates (Optimized for CPU)
     private readonly GROWTH_RATE = 0.00006;
-    private readonly CRASH_TOLERANCE = -0.0002; // Allow small negative drops (0.02%) before crashing
+    private readonly CRASH_TOLERANCE = -0.0005; // Slightly Increased Tolerance (0.05%)
+    private readonly GRACE_PERIOD_MS = 2000; // 2 Seconds Immunity on Takeoff
 
     constructor(
         private readonly redisService: RedisService,
@@ -256,6 +258,16 @@ export class AviatorGameLoopService implements OnModuleInit, OnModuleDestroy {
             shouldCrash = true;
             this.logger.warn(`[${room}] No Market Data available. Safety Crash.`);
         }
+
+        // --- GRACE PERIOD LOGIC ---
+        // If we represent a "Real Stock", we shouldn't crash on the runway.
+        // Ignore all crashes (except manual force/safety?) for the first 2 seconds.
+        if (shouldCrash && timeElapsed < this.GRACE_PERIOD_MS) {
+            this.logger.debug(`[${room}] Saved by Grace Period (${timeElapsed}ms)`);
+            shouldCrash = false;
+        }
+
+        // Hard Cap at 1000x remains a system necessity to prevent overflows/floating point errors,
 
         // Hard Cap at 1000x remains a system necessity to prevent overflows/floating point errors, 
         // but functionally it's "Pure Delta" below that.
